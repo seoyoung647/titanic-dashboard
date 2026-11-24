@@ -1,15 +1,17 @@
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# [추가] 실습 4-3: 가장 먼저 실행되는 st 명령어로 페이지 제목과 wide 레이아웃 설정
-st.set_page_config(page_title="Titanic 대시보드", layout="wide")
+st.set_page_config(page_title="Titanic 대시보드 - 심화 3", layout="wide")
 
 
-def filter_data(df, sexes, classes, age_range):
-    # [수정] 실습 4-5: 성별·등급 조건 먼저 적용
-    f = df[df["sex"].isin(sexes) & df["pclass"].isin(classes)]
-    # [수정] 실습 4-5: 나이 슬라이더가 전체 범위(0~80)가 아닐 때만 between 적용 (기본 891명 유지)
+def filter_data(df, sexes, classes, age_range, ports):
+    f = df[
+        df["sex"].isin(sexes)
+        & df["pclass"].isin(classes)
+        & df["embarked"].isin(ports)
+    ]
     if age_range != (0, 80):
         f = f[f["age"].between(*age_range)]
     return f
@@ -32,18 +34,17 @@ def class_rate_bar(df):
         .round(1)
         .reset_index()
     )
-    fig = px.bar(
+    return px.bar(
         r,
         x="pclass",
         y="survived",
         text="survived",
         title="객실 등급별 생존율(%)",
     )
-    return fig
 
 
 def age_hist(df):
-    fig = px.histogram(
+    return px.histogram(
         df,
         x="age",
         color="survived",
@@ -51,47 +52,94 @@ def age_hist(df):
         opacity=0.6,
         title="생존 여부별 나이 분포",
     )
-    return fig
+
+
+def group_rate_bar(df, col):
+    r = (
+        df.groupby(col, observed=False)["survived"]
+        .mean()
+        .mul(100)
+        .round(1)
+        .reset_index()
+    )
+    return px.bar(
+        r,
+        x=col,
+        y="survived",
+        text="survived",
+        title=f"{col} 기준 생존율(%)",
+    )
+
+
+# [추가] ③ IQR 기준 이상치 개수 계산 함수
+def iqr_outlier_count(series):
+    s = series.dropna()
+    q1 = s.quantile(0.25)
+    q3 = s.quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - 1.5 * iqr
+    upper = q3 + 1.5 * iqr
+    return int(((s < lower) | (s > upper)).sum())
 
 
 @st.cache_data
 def load_data():
-    return pd.read_csv("titanic.csv")
+    df = pd.read_csv("titanic.csv")
+    return df.dropna(subset=["embarked"]).copy()
 
 
 df = load_data()
 
 st.title("타이타닉, 누가 살아남았나?")
 
-# 사이드바 위젯
 sexes = st.sidebar.multiselect("성별", ["male", "female"], ["male", "female"])
 classes = st.sidebar.multiselect("객실 등급", [1, 2, 3], [1, 2, 3])
 ages = st.sidebar.slider("나이 범위", 0, 80, (0, 80))
+ports = st.sidebar.multiselect("승선 항구", ["S", "C", "Q"], ["S", "C", "Q"])
 
-# [수정] 실습 4-5: 성별이나 등급을 하나도 고르지 않으면 경고 후 실행 중단
-if not sexes or not classes:  # [수정]
-    st.warning("성별과 등급을 하나 이상 선택하세요.")  # [수정]
-    st.stop()  # [수정]
+if not sexes or not classes or not ports:
+    st.warning("성별, 등급, 승선 항구를 하나 이상 선택하세요.")
+    st.stop()
 
-f = filter_data(df, sexes, classes, ages)
+f = filter_data(df, sexes, classes, ages, ports)
 
-# [수정] 실습 4-5: 필터 결과가 0명이면 안내 후 실행 중단
-if len(f) == 0:  # [수정]
-    st.warning("조건에 맞는 승객이 없습니다.")  # [수정]
-    st.stop()  # [수정]
+if len(f) == 0:
+    st.warning("조건에 맞는 승객이 없습니다.")
+    st.stop()
 
-# [추가] 실습 4-2: st.write 대신 st.columns(3) KPI 카드 3개 추가
-n, rate, age = kpi(f)  # [추가]
-c1, c2, c3 = st.columns(3)  # [추가]
-c1.metric("승객 수", f"{n}명")  # [추가]
-c2.metric("생존율", f"{rate}%")  # [추가]
-c3.metric("평균 나이", f"{age}세")  # [추가]
+# [추가] ① st.tabs로 개요 / 관계 / 이상치 3개 탭 구성
+tab1, tab2, tab3 = st.tabs(["개요", "관계", "이상치"])
 
-# [추가] 실습 4-3: KPI 아래 st.columns(2)에 차트 2개 나란히 배치
-left, right = st.columns(2)  # [추가]
-left.plotly_chart(class_rate_bar(f), use_container_width=True)  # [추가]
-right.plotly_chart(age_hist(f), use_container_width=True)  # [추가]
+with tab1:
+    n, rate, age = kpi(f)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("승객 수", f"{n}명")
+    c2.metric("생존율", f"{rate}%", f"{rate - 38.4:+.1f}%p")
+    c3.metric("평균 나이", f"{age}세")
 
-# [추가] 실습 4-3: 맨 아래 st.expander("데이터 보기") 안에 필터된 표 출력
-with st.expander("데이터 보기"):  # [추가]
-    st.dataframe(f)  # [추가]
+    left, right = st.columns(2)
+    left.plotly_chart(class_rate_bar(f), use_container_width=True)
+    right.plotly_chart(age_hist(f), use_container_width=True)
+
+    selected_col = st.selectbox("생존율 비교 기준 선택", ["sex", "class", "embarked"])
+    target_col = "pclass" if selected_col == "class" and "class" not in f.columns else selected_col
+    st.plotly_chart(group_rate_bar(f, target_col), use_container_width=True)
+
+    with st.expander("데이터 보기"):
+        st.dataframe(f)
+
+with tab2:
+    # [추가] ② 수치형 열 상관 히트맵 (px.imshow)
+    num_df = f.select_dtypes(include=[np.number])
+    corr = num_df.corr(numeric_only=True).round(2)
+    fig_corr = px.imshow(corr, text_auto=True, title="수치형 열 상관관계 히트맵")
+    st.plotly_chart(fig_corr, use_container_width=True)
+
+with tab3:
+    # [추가] ③ 열 선택 -> IQR 이상치 수 + 박스플롯 (px.box)
+    num_cols = f.select_dtypes(include=[np.number]).columns.tolist()
+    outlier_col = st.selectbox("이상치를 확인할 열 선택", num_cols)
+    cnt = iqr_outlier_count(f[outlier_col])
+    st.metric("IQR 이상치 수", f"{cnt}개")
+    fig_box = px.box(f, y=outlier_col, title=f"{outlier_col} 박스플롯")
+    st.plotly_chart(fig_box, use_container_width=True)
